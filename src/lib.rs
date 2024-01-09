@@ -20,6 +20,7 @@ use nucleo::{
 };
 
 pub use crossterm::style::{Attribute, Attributes, Color, ContentStyle, StyledContent, Stylize};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -253,17 +254,14 @@ impl<T> FuzzySelect<T> {
         let mut prompt = self.init_prompt()?;
         prompt.initial_prompt(self.prompt.as_deref());
 
+        let mut redraw = Redraw::Selection;
         let selected = loop {
-            let res = prompt.tick(&self.theme, &mut engine, &self.options)?;
+            let res = prompt.tick(&self.theme, &mut engine, &self.options, redraw)?;
 
             match res {
-                Some(Stop::Quit) => {
-                    return Ok(None);
-                }
-                Some(Stop::Selected(selected)) => {
-                    break selected;
-                }
-                None => {}
+                Ok(r) => redraw = r,
+                Err(Stop::Quit) => return Ok(None),
+                Err(Stop::Selected(selected)) => break selected,
             }
         };
         drop(prompt);
@@ -291,7 +289,7 @@ impl<T> FuzzySelect<T> {
             });
         }
 
-        if let Some(query) = self.query.as_ref() {
+        if let Some(query) = self.query.as_deref() {
             engine
                 .pattern
                 .reparse(0, query, CaseMatching::Smart, Normalization::Smart, true);
@@ -309,7 +307,7 @@ impl<T> FuzzySelect<T> {
             .unwrap_or(10);
         let highlighter = Highlighter::new(self.highlight && self.color.unwrap_or(true));
         let query = self.query.take().unwrap_or_default();
-        let cursor_pos = query.len();
+        let input = Input::new(query);
         let selected = self.initial_selection;
         if selected as usize >= self.options.len() {
             return Err(Error::InvalidDefaultSelection);
@@ -317,15 +315,13 @@ impl<T> FuzzySelect<T> {
 
         Ok(Prompt {
             term,
-            query,
-            cursor_pos,
             scroll_offset: 0,
             selected,
             height: u32::from(page_size),
             active: true,
-            appending: true,
             number_of_matches: u32::MAX,
             highlighter,
+            input,
         })
     }
 }
@@ -458,13 +454,11 @@ impl Select for Cow<'_, str> {
 
 struct Prompt {
     term: Terminal,
-    query: String,
-    cursor_pos: usize,
+    input: Input,
     scroll_offset: u32,
     selected: u32,
     height: u32,
     active: bool,
-    appending: bool,
     number_of_matches: u32,
     highlighter: Highlighter,
 }
@@ -489,7 +483,8 @@ impl Prompt {
         theme: &Theme,
         nucleo: &mut Nucleo<usize>,
         items: &[T],
-    ) -> Result<Option<Stop>> {
+        redraw: Redraw,
+    ) -> Result<Result<Redraw, Stop>> {
         if self.active {
             let status = nucleo.tick(10);
             let snap = nucleo.snapshot();
@@ -501,29 +496,31 @@ impl Prompt {
                     .min(snap.matched_item_count().saturating_sub(1));
             }
 
-            self.render_items(theme, snap, items)?;
+            self.render_items(theme, snap, items, redraw)?;
         }
 
         let key = crossterm::event::read()?;
-        let handled = self.handle_event(&key);
+        let changed = self.handle_event(&key);
 
-        let query_changed = match handled {
-            Handled::Unchanged => false,
-            Handled::Changed => true,
-            Handled::Stop(stop) => return Ok(Some(stop)),
+        let redraw = match changed {
+            Changed::Nothing => Redraw::Nothing,
+            Changed::Cursor => Redraw::Cursor,
+            Changed::Selection => Redraw::Selection,
+            Changed::Content => {
+                nucleo.pattern.reparse(
+                    0,
+                    self.input.content(),
+                    CaseMatching::Smart,
+                    Normalization::Smart,
+                    self.input.appending(),
+                );
+
+                Redraw::Content
+            }
+            Changed::Stop(stop) => return Ok(Err(stop)),
         };
 
-        if query_changed {
-            nucleo.pattern.reparse(
-                0,
-                &self.query,
-                CaseMatching::Smart,
-                Normalization::Smart,
-                self.appending,
-            );
-        }
-
-        Ok(None)
+        Ok(Ok(redraw))
     }
 
     fn render_items<T: Select>(
@@ -531,142 +528,123 @@ impl Prompt {
         theme: &Theme,
         snapshot: &Snapshot<usize>,
         items: &[T],
+        redraw: Redraw,
     ) -> Result<()> {
         self.number_of_matches = snapshot.matched_item_count();
 
-        let end = self
-            .scroll_offset
-            .saturating_add(self.height)
-            .min(snapshot.matched_item_count());
-        let start = self.scroll_offset.min(end.saturating_sub(1));
+        if redraw >= Redraw::Content {
+            let end = self
+                .scroll_offset
+                .saturating_add(self.height)
+                .min(snapshot.matched_item_count());
+            let start = self.scroll_offset.min(end.saturating_sub(1));
 
-        let matched_items = snapshot.matched_items(start..end).enumerate();
+            let matched_items = snapshot.matched_items(start..end).enumerate();
 
-        for (idx, item) in matched_items {
-            #[allow(clippy::cast_possible_truncation)]
-            let idx = idx as u32 + start;
-            let entry = &items[*item.data];
+            for (idx, item) in matched_items {
+                #[allow(clippy::cast_possible_truncation)]
+                let idx = idx as u32 + start;
+                let entry = &items[*item.data];
 
-            let (indicator, text, hl) = if idx == self.selected {
-                (
-                    theme.selected_indicator,
-                    &theme.selected_text,
-                    &theme.selected_highlight,
-                )
-            } else {
-                (theme.indicator, &theme.text, &theme.highlight)
-            };
+                let (indicator, text, hl) = if idx == self.selected {
+                    (
+                        theme.selected_indicator,
+                        &theme.selected_text,
+                        &theme.selected_highlight,
+                    )
+                } else {
+                    (theme.indicator, &theme.text, &theme.highlight)
+                };
 
-            self.term
-                .queue(cursor::MoveToNextLine(1))
-                .queue(terminal::Clear(ClearType::CurrentLine))
-                .queue(style::PrintStyledContent(indicator))
-                .queue_(style::PrintStyledContent(text.apply(" ")));
-
-            if let Some(content) = entry.render_before_content() {
-                let _ = self
-                    .term
-                    .queue(style::PrintStyledContent(text.apply(content)));
-            }
-
-            self.highlighter.render(
-                *text,
-                *hl,
-                &mut self.term,
-                snapshot.pattern().column_pattern(0),
-                item.matcher_columns[0].slice(..),
-            );
-
-            if let Some(content) = entry.render_after_content() {
                 self.term
-                    .queue_(style::PrintStyledContent(text.apply(content)));
+                    .queue(cursor::MoveToNextLine(1))
+                    .queue(terminal::Clear(ClearType::CurrentLine))
+                    .queue(style::PrintStyledContent(indicator))
+                    .queue_(style::PrintStyledContent(text.apply(" ")));
+
+                if let Some(content) = entry.render_before_content() {
+                    let _ = self
+                        .term
+                        .queue(style::PrintStyledContent(text.apply(content)));
+                }
+
+                self.highlighter.render(
+                    *text,
+                    *hl,
+                    &mut self.term,
+                    snapshot.pattern().column_pattern(0),
+                    item.matcher_columns[0].slice(..),
+                );
+
+                if let Some(content) = entry.render_after_content() {
+                    self.term
+                        .queue_(style::PrintStyledContent(text.apply(content)));
+                }
             }
         }
 
-        #[allow(clippy::cast_possible_truncation)]
-        let cursor_offset = self
-            .query
-            .len()
-            .saturating_sub(self.cursor_pos)
-            .min(usize::from(u16::MAX)) as u16;
+        if redraw >= Redraw::Content {
+            self.term
+                .queue(terminal::Clear(ClearType::FromCursorDown))
+                .queue(cursor::RestorePosition)
+                .queue(terminal::Clear(ClearType::UntilNewLine))
+                .queue_(style::PrintStyledContent(self.input.content().bold()));
 
-        self.term
-            .queue(terminal::Clear(ClearType::FromCursorDown))
-            .queue(cursor::RestorePosition)
-            .queue(terminal::Clear(ClearType::UntilNewLine))
-            .queue_(style::PrintStyledContent(self.query.as_str().bold()));
+            let offset = self.input.cursor_offset_from_end();
+            if offset > 0 {
+                self.term.queue_(cursor::MoveLeft(offset));
+            }
+        } else if redraw == Redraw::Cursor {
+            self.term.queue_(cursor::RestorePosition);
 
-        if cursor_offset > 0 {
-            self.term.queue_(cursor::MoveLeft(cursor_offset));
+            let offset = self.input.cursor_offset_from_start();
+            if offset > 0 {
+                self.term.queue_(cursor::MoveRight(offset));
+            }
         }
 
-        self.term.flush()?;
+        if redraw > Redraw::Nothing {
+            self.term.flush()?;
+        }
 
         Ok(())
     }
 
-    fn handle_event(&mut self, event: &Event) -> Handled {
+    fn handle_event(&mut self, event: &Event) -> Changed {
         match event {
             Event::Key(key) => return self.handle_key_event(key.code, key.modifiers),
             Event::FocusLost => self.active = false,
             Event::FocusGained => self.active = true,
-            Event::Resize(_, h) => self.height = u32::from(h.saturating_sub(1)),
+            Event::Resize(_, h) => {
+                self.height = u32::from(h.saturating_sub(1));
+                return Changed::Selection;
+            }
             Event::Mouse(_) | Event::Paste(_) => {}
         };
 
-        Handled::Unchanged
+        Changed::Nothing
     }
 
-    fn handle_key_event(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Handled {
+    fn handle_key_event(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Changed {
         match (code, modifiers) {
-            (KeyCode::Esc, _) => {
-                if self.query.is_empty() {
-                    Handled::Stop(Stop::Quit)
-                } else {
-                    self.query.clear();
-                    self.cursor_pos = 0;
-                    self.appending = false;
-                    Handled::Changed
-                }
-            }
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => Handled::Stop(Stop::Quit),
-            (KeyCode::Enter | KeyCode::Char('\n' | '\r'), _) => {
-                Handled::Stop(Stop::Selected(self.selected))
-            }
-            (KeyCode::Backspace, _) => match self.cursor_pos.checked_sub(1) {
-                Some(pos) => {
-                    let _ = self.query.remove(pos);
-                    self.cursor_pos = pos;
-                    self.appending = false;
-                    Handled::Changed
-                }
-                _ => Handled::Unchanged,
+            (KeyCode::Esc, _) => match self.input.clear() {
+                Changed::Nothing => Changed::Stop(Stop::Quit),
+                otherwise => otherwise,
             },
-            (KeyCode::Delete, _) => {
-                if self.cursor_pos < self.query.len() {
-                    let _ = self.query.remove(self.cursor_pos);
-                    self.appending = false;
-                    Handled::Changed
-                } else {
-                    Handled::Unchanged
-                }
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => Changed::Stop(Stop::Quit),
+            (KeyCode::Enter | KeyCode::Char('\n' | '\r'), _) => {
+                Changed::Stop(Stop::Selected(self.selected))
             }
-            (KeyCode::Home, _) => {
-                self.cursor_pos = 0;
-                self.appending = self.query.is_empty();
-                Handled::Unchanged
-            }
-            (KeyCode::End, _) => {
-                self.cursor_pos = self.query.len();
-                self.appending = true;
-                Handled::Unchanged
-            }
-            (KeyCode::Left, m) => {
-                self.move_on_line(isize::from(m.contains(KeyModifiers::SHIFT)) * -9 - 1)
-            }
-            (KeyCode::Right, m) => {
-                self.move_on_line(isize::from(m.contains(KeyModifiers::SHIFT)) * 9 + 1)
-            }
+            (KeyCode::Backspace, _) => self.input.delete_left(),
+            (KeyCode::Delete, _) => self.input.delete_right(),
+            (KeyCode::Home, _) => self.input.move_to_start(),
+            (KeyCode::End, _) => self.input.move_to_end(),
+            (KeyCode::Left, m) => self
+                .input
+                .move_by(isize::from(m.contains(KeyModifiers::SHIFT)) * -9 - 1),
+            (KeyCode::Right, m) => self
+                .input
+                .move_by(isize::from(m.contains(KeyModifiers::SHIFT)) * 9 + 1),
             (KeyCode::Up, m) => {
                 self.move_selection(i32::from(m.contains(KeyModifiers::SHIFT)) * -9 - 1)
             }
@@ -675,36 +653,18 @@ impl Prompt {
             }
             (KeyCode::PageUp, _) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(self.height);
-                Handled::Unchanged
+                Changed::Selection
             }
             (KeyCode::PageDown, _) => {
                 self.scroll_offset = self.scroll_offset.saturating_add(self.height);
-                Handled::Unchanged
+                Changed::Selection
             }
-            (KeyCode::Char(c), _) => {
-                if self.cursor_pos == self.query.len() {
-                    self.appending = true;
-                    self.query.push(c);
-                } else {
-                    self.query.insert(self.cursor_pos, c);
-                }
-                self.cursor_pos += 1;
-                Handled::Changed
-            }
-            _ => Handled::Unchanged,
+            (KeyCode::Char(c), _) => self.input.insert(c),
+            _ => Changed::Nothing,
         }
     }
 
-    fn move_on_line(&mut self, diff: isize) -> Handled {
-        self.cursor_pos = self
-            .cursor_pos
-            .saturating_add_signed(diff)
-            .min(self.query.len());
-        self.appending = self.cursor_pos == self.query.len();
-        Handled::Unchanged
-    }
-
-    fn move_selection(&mut self, diff: i32) -> Handled {
+    fn move_selection(&mut self, diff: i32) -> Changed {
         self.selected = self
             .selected
             .saturating_add_signed(diff)
@@ -718,8 +678,168 @@ impl Prompt {
             self.scroll_offset = self.selected.saturating_sub(self.height).saturating_add(1);
         }
 
-        Handled::Unchanged
+        Changed::Selection
     }
+}
+
+#[derive(Clone, Debug)]
+struct Input {
+    content: String,
+    boundaries: Vec<usize>,
+    cursor: usize,
+    appending: bool,
+}
+
+impl Input {
+    fn new(content: impl Into<String>) -> Self {
+        let content = content.into();
+        let boundaries = content
+            .grapheme_indices(true)
+            .map(|(idx, _)| idx)
+            .collect::<Vec<_>>();
+        let cursor = boundaries.len();
+        Self {
+            content,
+            boundaries,
+            cursor,
+            appending: true,
+        }
+    }
+
+    fn content(&self) -> &str {
+        &self.content
+    }
+
+    fn appending(&self) -> bool {
+        self.appending
+    }
+
+    fn cursor_offset_from_start(&self) -> u16 {
+        #[allow(clippy::cast_possible_truncation)]
+        let cursor = self.cursor.min(usize::from(u16::MAX)) as u16;
+
+        cursor
+    }
+
+    fn cursor_offset_from_end(&self) -> u16 {
+        #[allow(clippy::cast_possible_truncation)]
+        let cursor_offset = self
+            .boundaries
+            .len()
+            .saturating_sub(self.cursor)
+            .min(usize::from(u16::MAX)) as u16;
+
+        cursor_offset
+    }
+
+    fn clear(&mut self) -> Changed {
+        if self.content.is_empty() {
+            self.appending = true;
+            Changed::Nothing
+        } else {
+            self.content.clear();
+            self.boundaries.clear();
+            self.cursor = 0;
+            self.appending = false;
+            Changed::Content
+        }
+    }
+
+    fn insert(&mut self, c: char) -> Changed {
+        if self.cursor >= self.boundaries.len() {
+            self.appending = true;
+            self.boundaries.push(self.content.len());
+            self.cursor = self.boundaries.len();
+            self.content.push(c);
+        } else {
+            self.appending = false;
+            self.content.insert(self.boundaries[self.cursor], c);
+            self.boundaries
+                .insert(self.cursor, self.boundaries[self.cursor]);
+            let len = c.len_utf8();
+            self.boundaries[self.cursor + 1..]
+                .iter_mut()
+                .for_each(|b| *b += len);
+            self.cursor += 1;
+        }
+        Changed::Content
+    }
+
+    fn delete_left(&mut self) -> Changed {
+        if let Some(pos) = self.cursor.checked_sub(1) {
+            let indexes = self.boundaries[pos]..self.index_at_cursor();
+            self.content.replace_range(indexes, "");
+            let _ = self.boundaries.remove(pos);
+            self.cursor = pos;
+            self.appending = false;
+            Changed::Content
+        } else {
+            Changed::Nothing
+        }
+    }
+
+    fn delete_right(&mut self) -> Changed {
+        if self.cursor < self.boundaries.len() {
+            let start = self.boundaries.remove(self.cursor);
+            let indexes = start..self.index_at_cursor();
+            self.content.replace_range(indexes, "");
+            self.appending = false;
+            Changed::Content
+        } else {
+            Changed::Nothing
+        }
+    }
+
+    fn move_by(&mut self, diff: isize) -> Changed {
+        self.move_to(self.cursor.saturating_add_signed(diff))
+    }
+
+    fn move_to(&mut self, cursor: usize) -> Changed {
+        let changed = cursor != self.cursor;
+        self.cursor = cursor.min(self.boundaries.len());
+        if changed {
+            Changed::Cursor
+        } else {
+            Changed::Nothing
+        }
+    }
+
+    fn move_to_start(&mut self) -> Changed {
+        self.move_to(0)
+    }
+
+    fn move_to_end(&mut self) -> Changed {
+        self.move_to(self.boundaries.len())
+    }
+
+    fn index_at_cursor(&self) -> usize {
+        self.boundaries
+            .get(self.cursor)
+            .map_or_else(|| self.content.len(), |&i| i)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Changed {
+    Nothing,
+    Cursor,
+    Content,
+    Selection,
+    Stop(Stop),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Stop {
+    Quit,
+    Selected(u32),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Redraw {
+    Nothing,
+    Cursor,
+    Content,
+    Selection,
 }
 
 struct Highlighter {
@@ -777,19 +897,6 @@ impl Highlighter {
             term.queue_(style::PrintStyledContent(text.apply(matched_item)));
         }
     }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Handled {
-    Unchanged,
-    Changed,
-    Stop(Stop),
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Stop {
-    Quit,
-    Selected(u32),
 }
 
 struct Terminal {
@@ -851,5 +958,268 @@ impl Drop for Terminal {
             let _ = self.queue(terminal::LeaveAlternateScreen).flush();
         }
         let _ = terminal::disable_raw_mode();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_push_at_end() {
+        let mut input = Input::new("foo");
+
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        let changed = input.insert('b');
+        assert_eq!(input.content(), "foob");
+        assert_eq!(input.cursor_offset_from_start(), 4);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Content);
+    }
+
+    #[test]
+    fn input_push_at_middle() {
+        let mut input = Input::new("foo");
+        let changed = input.move_by(-1);
+        assert_eq!(changed, Changed::Cursor);
+
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 2);
+        assert_eq!(input.cursor_offset_from_end(), 1);
+        assert!(input.appending());
+
+        let changed = input.insert('b');
+        assert_eq!(input.content(), "fobo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 1);
+        assert!(!input.appending());
+
+        assert_eq!(changed, Changed::Content);
+    }
+
+    #[test]
+    fn input_delete_left() {
+        let mut input = Input::new("foo");
+
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        let changed = input.delete_left();
+        assert_eq!(input.content(), "fo");
+        assert_eq!(input.cursor_offset_from_start(), 2);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(!input.appending());
+
+        assert_eq!(changed, Changed::Content);
+    }
+
+    #[test]
+    fn input_delete_left_from_middle() {
+        let mut input = Input::new("fob");
+        let changed = input.move_by(-1);
+        assert_eq!(changed, Changed::Cursor);
+
+        assert_eq!(input.content(), "fob");
+        assert_eq!(input.cursor_offset_from_start(), 2);
+        assert_eq!(input.cursor_offset_from_end(), 1);
+        assert!(input.appending());
+
+        let changed = input.delete_left();
+        assert_eq!(input.content(), "fb");
+        assert_eq!(input.cursor_offset_from_start(), 1);
+        assert_eq!(input.cursor_offset_from_end(), 1);
+        assert!(!input.appending());
+
+        assert_eq!(changed, Changed::Content);
+    }
+
+    #[test]
+    fn input_delete_left_from_start() {
+        let mut input = Input::new("fob");
+        let changed = input.move_to(0);
+        assert_eq!(changed, Changed::Cursor);
+
+        assert_eq!(input.content(), "fob");
+        assert_eq!(input.cursor_offset_from_start(), 0);
+        assert_eq!(input.cursor_offset_from_end(), 3);
+        assert!(input.appending());
+
+        let changed = input.delete_left();
+        assert_eq!(input.content(), "fob");
+        assert_eq!(input.cursor_offset_from_start(), 0);
+        assert_eq!(input.cursor_offset_from_end(), 3);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Nothing);
+    }
+
+    #[test]
+    fn input_delete_right() {
+        let mut input = Input::new("foo");
+
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        let changed = input.delete_right();
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Nothing);
+    }
+
+    #[test]
+    fn input_delete_right_from_middle() {
+        let mut input = Input::new("fob");
+        let changed = input.move_by(-1);
+        assert_eq!(changed, Changed::Cursor);
+
+        assert_eq!(input.content(), "fob");
+        assert_eq!(input.cursor_offset_from_start(), 2);
+        assert_eq!(input.cursor_offset_from_end(), 1);
+        assert!(input.appending());
+
+        let changed = input.delete_right();
+        assert_eq!(input.content(), "fo");
+        assert_eq!(input.cursor_offset_from_start(), 2);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(!input.appending());
+
+        assert_eq!(changed, Changed::Content);
+    }
+
+    #[test]
+    fn input_delete_right_from_start() {
+        let mut input = Input::new("fob");
+        let changed = input.move_to(0);
+        assert_eq!(changed, Changed::Cursor);
+
+        assert_eq!(input.content(), "fob");
+        assert_eq!(input.cursor_offset_from_start(), 0);
+        assert_eq!(input.cursor_offset_from_end(), 3);
+        assert!(input.appending());
+
+        let changed = input.delete_right();
+        assert_eq!(input.content(), "ob");
+        assert_eq!(input.cursor_offset_from_start(), 0);
+        assert_eq!(input.cursor_offset_from_end(), 2);
+        assert!(!input.appending());
+
+        assert_eq!(changed, Changed::Content);
+    }
+
+    #[test]
+    fn input_move_by() {
+        let mut input = Input::new("foo");
+
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        let changed = input.move_by(-1);
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 2);
+        assert_eq!(input.cursor_offset_from_end(), 1);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Cursor);
+
+        let changed = input.move_by(1);
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Cursor);
+    }
+
+    #[test]
+    fn input_move_to() {
+        let mut input = Input::new("foo");
+
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        let changed = input.move_to(1);
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 1);
+        assert_eq!(input.cursor_offset_from_end(), 2);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Cursor);
+
+        let changed = input.move_to(3);
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Cursor);
+    }
+
+    #[test]
+    fn input_move_to_start_and_end() {
+        let mut input = Input::new("foo");
+
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        let changed = input.move_to_start();
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 0);
+        assert_eq!(input.cursor_offset_from_end(), 3);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Cursor);
+
+        let changed = input.move_to_end();
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Cursor);
+    }
+
+    #[test]
+    fn input_clear() {
+        let mut input = Input::new("foo");
+
+        assert_eq!(input.content(), "foo");
+        assert_eq!(input.cursor_offset_from_start(), 3);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        let changed = input.clear();
+        assert_eq!(input.content(), "");
+        assert_eq!(input.cursor_offset_from_start(), 0);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(!input.appending());
+
+        assert_eq!(changed, Changed::Content);
+
+        let changed = input.clear();
+        assert_eq!(input.content(), "");
+        assert_eq!(input.cursor_offset_from_start(), 0);
+        assert_eq!(input.cursor_offset_from_end(), 0);
+        assert!(input.appending());
+
+        assert_eq!(changed, Changed::Nothing);
     }
 }
