@@ -1,0 +1,25 @@
+# {{crate}} [![CI Status][ci-badge]][ci-url] [![Crates.io][crates-badge]][crates-url] [![Docs][docs-badge]][docs-url] ![License: {{ license }}][license-badge] ![Rust Version: {{rust_version}}][rust-version-badge]
+
+[ci-badge]: {{ repository }}/actions/workflows/checks.yml/badge.svg
+[ci-url]: {{ repository }}
+[crates-badge]: https://img.shields.io/crates/v/{{ crate | urlencode }}?style=shield
+[crates-url]: https://crates.io/crates/{{ crate | urlencode }}
+[docs-badge]: https://img.shields.io/badge/docs-latest-blue.svg?style=shield
+[docs-url]: https://docs.rs/{{ crate | urlencode }}
+[license-badge]: https://img.shields.io/badge/license-{{ license | replace("-", "--") | urlencode }}-blue.svg?style=shield
+[rust-version-badge]: https://img.shields.io/badge/rustc-{{ rust_version | urlencode }}-orange.svg?style=shield
+
+{{ readme }}
+
+## License
+
+{{ crate }} is licensed under either of the following, at your option:
+
+ * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+---
+
+{%- if links != "" %}
+{{ links }}
+{%- endif -%}

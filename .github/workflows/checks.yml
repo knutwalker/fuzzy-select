@@ -1,0 +1,90 @@
+name: checks
+
+on:
+  push:
+    branches:
+      - main
+  merge_group:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  RUST_LOG: debug
+  CARGO_TERM_COLOR: always
+  MSRV: 1.75.0
+
+jobs:
+  check:
+    name: Compile on MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        run: rustup toolchain install ${{ env.MSRV }} --profile minimal --no-self-update
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Setup Rust Problem Matchers
+        uses: r7kamura/rust-problem-matchers@v1
+      - name: Run cargo check
+        run: cargo +$MSRV check --all-targets
+      - name: Run clippy
+        run: cargo +$MSRV clippy --all-targets --all-features -- -D warnings
+
+  fmt:
+    name: Check formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Setup Rust Problem Matchers
+        uses: r7kamura/rust-problem-matchers@v1
+      - name: Run cargo fmt
+        run: cargo +stable fmt --all -- --check
+
+  unit-tests:
+    name: Run unit tests
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable, beta, 1.75.0]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal --no-self-update
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+      - name: Setup Rust Problem Matchers
+        uses: r7kamura/rust-problem-matchers@v1
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: Run unit tests
+        run: cargo +${{ matrix.rust }} nextest run
+
+  release:
+    name: Release
+    needs: [check, fmt, unit-tests]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        if: startsWith(github.ref, 'refs/tags/')
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - name: Set up Rust cache
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: Swatinem/rust-cache@v2
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p fuzzy-select

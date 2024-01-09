@@ -1,0 +1,6 @@
+consolidate-commits = false
+pre-release-commit-message = "Release {{version}}"
+shared-version = true
+sign-commit = true
+sign-tag = true
+tag-message = "Release {{crate_name}} {{version}}"

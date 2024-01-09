@@ -6,9 +6,10 @@ repository = "https://github.com/knutwalker/fuzzy-select"
 authors = ["Paul Horn <developer@knutwalker.de>"]
 description = "Fuzzy select using Nucleo as matching engine"
 license = "MIT OR Apache-2.0"
-publish = false
+publish = true
 readme = "README.md"
 rust-version = "1.75.0"
+categories = ["command-line-utilities"]
 keywords = ["fuzzy", "terminal", "tui", "nucleo", "fzf", "skim"]
 
 [dependencies]
@@ -62,7 +63,3 @@ nursery = "warn"
 pedantic = "warn"
 missing_const_for_fn = "allow"
 
-[package.metadata.release]
-pre-release-commit-message = "Release {{crate_name}} {{version}}"
-sign-commit = true
-sign-tag = true

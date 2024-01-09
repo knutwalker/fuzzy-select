@@ -1,3 +1,30 @@
+//! ## A fuzzy select prompt for the terminal.
+//!
+//! This crate is a library for creating a fuzzy select prompt for the terminal.
+//! It uses [nucleo] as its fuzzy matching engine.
+//! The prompt is very simple and not very configurable.
+//!
+//! ## Usage
+//!
+//! Add the following to your `Cargo.toml`:
+//!
+//! ```toml
+//! [dependencies]
+//! fuzzy-select = "0.1"
+//! ```
+//!
+//! ## Example
+//! ```no_run
+//! use fuzzy_select::FuzzySelect;
+//!
+//! let options = vec!["foo", "bar", "baz"];
+//! let selected = FuzzySelect::new()
+//!     .with_prompt("Select something")
+//!     .with_options(options)
+//!     .select()?;
+//!
+//! println!("Selected: {:?}", selected);
+//! ```
 use std::{
     borrow::Cow,
     fmt,
@@ -16,7 +43,7 @@ use crossterm::{
 };
 use nucleo::{
     pattern::{CaseMatching, Normalization, Pattern},
-    Config, Matcher, Nucleo, Snapshot, Utf32Str, Utf32String,
+    Config, Matcher, Nucleo, Snapshot, Utf32Str,
 };
 
 pub use crossterm::style::{Attribute, Attributes, Color, ContentStyle, StyledContent, Stylize};
@@ -29,11 +56,11 @@ pub enum Error {
     #[error("No options to select from")]
     NoOptions,
 
-    #[error("Initial selected index is out of bounds")]
-    InvalidDefaultSelection,
-
     #[error("Selection cancelled")]
     Cancelled,
+
+    #[error("Selected index is out of bounds")]
+    InvalidSelection,
 
     #[error("Cannot run with the terminal in non-interactive mode (not a tty)")]
     NonInteractive,
@@ -42,9 +69,9 @@ pub enum Error {
     IoError(#[from] io::Error),
 }
 
-/// Trait for items that can be selected in a fuzzy select prompt.
+/// An item that can be selected in a fuzzy select prompt.
 ///
-/// The trait is implemented for a number of string like types, where
+/// This trait is implemented for a number of string like types, where
 /// the rendered and searched content is identical to the string.
 ///
 /// For more complex items, trait implementation need to provide what
@@ -56,7 +83,7 @@ pub enum Error {
 /// This will only be included in the rendering, not in the search.
 pub trait Select {
     /// The content that is being used to match against the prompt input.
-    fn set_search_content(&self, content: &mut Utf32String);
+    fn search_content(&self) -> &str;
 
     /// Optionally render additional content before the search content when
     /// showing this item.
@@ -67,6 +94,7 @@ pub trait Select {
     fn render_after_content(&self) -> Option<impl fmt::Display + '_>;
 }
 
+/// A fuzzy select prompt. See the [module level documentation](crate) for more information.
 #[derive(Clone, Debug)]
 pub struct FuzzySelect<T> {
     options: Vec<T>,
@@ -226,7 +254,25 @@ impl<T> FuzzySelect<T> {
     }
 
     #[must_use]
-    pub fn with_alternate_screen(mut self, alternate_screen: bool) -> Self {
+    pub fn with_default_theme(mut self) -> Self {
+        self.theme = Theme::default();
+        self
+    }
+
+    #[must_use]
+    pub fn without_alternate_screen(mut self) -> Self {
+        self.alternate_screen = false;
+        self
+    }
+
+    #[must_use]
+    pub fn with_alternate_screen(mut self) -> Self {
+        self.alternate_screen = true;
+        self
+    }
+
+    #[must_use]
+    pub fn set_alternate_screen(mut self, alternate_screen: bool) -> Self {
         self.alternate_screen = alternate_screen;
         self
     }
@@ -236,13 +282,15 @@ impl<T> FuzzySelect<T> {
     /// # Errors
     /// - [`Error::NoOptions`] if there are no options to select from.
     ///     Need to call one of the `*option*` methods before calling this.
-    /// - [`Error::InvalidDefaultSelection`] if the default selection index
+    /// - [`Error::Cancelled`] if the user cancelled the selection
+    ///     (e.g. by hitting Ctrl-C or Esc).
+    /// - [`Error::InvalidSelection`] if the default selection index
     ///     is out of bounds based off the provided options.
     /// - [`Error::NonInteractive`] if the terminal is not in interactive mode.
     ///    This is the case if the terminal is not a tty.
     /// - [`Error::IoError`] if there was an error interacting with interacting
     ///     with terminal in general.
-    pub fn select(mut self) -> Result<Option<T>>
+    pub fn select(mut self) -> Result<T>
     where
         T: Select,
     {
@@ -260,19 +308,39 @@ impl<T> FuzzySelect<T> {
 
             match res {
                 Ok(r) => redraw = r,
-                Err(Stop::Quit) => return Ok(None),
+                Err(Stop::Quit) => return Err(Error::Cancelled),
                 Err(Stop::Selected(selected)) => break selected,
             }
         };
         drop(prompt);
 
-        let item = engine
+        let item = *engine
             .snapshot()
             .get_matched_item(selected)
-            .map(|item| item.data)
-            .map(|idx| self.options.swap_remove(*idx));
+            .ok_or(Error::InvalidSelection)?
+            .data;
+        let item = self.options.swap_remove(item);
 
         Ok(item)
+    }
+
+    /// Runs the fuzzy select prompt and returns the selected item or None
+    /// if no selection was made.
+    ///
+    /// # Errors
+    /// - [`Error::NonInteractive`] if the terminal is not in interactive mode.
+    ///    This is the case if the terminal is not a tty.
+    /// - [`Error::IoError`] if there was an error interacting with interacting
+    ///     with terminal in general.
+    pub fn select_opt(self) -> Result<Option<T>>
+    where
+        T: Select,
+    {
+        match self.select() {
+            Ok(res) => Ok(Some(res)),
+            Err(Error::NoOptions | Error::Cancelled | Error::InvalidSelection) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     fn init_engine(&self) -> Nucleo<usize>
@@ -285,7 +353,7 @@ impl<T> FuzzySelect<T> {
 
         for (idx, item) in self.options.iter().enumerate() {
             let _ = injector.push(idx, move |cols| {
-                item.set_search_content(&mut cols[0]);
+                cols[0] = item.search_content().into();
             });
         }
 
@@ -310,7 +378,7 @@ impl<T> FuzzySelect<T> {
         let input = Input::new(query);
         let selected = self.initial_selection;
         if selected as usize >= self.options.len() {
-            return Err(Error::InvalidDefaultSelection);
+            return Err(Error::InvalidSelection);
         }
 
         Ok(Prompt {
@@ -326,6 +394,7 @@ impl<T> FuzzySelect<T> {
     }
 }
 
+/// A theme describes how different parts of the prompt are rendered.
 #[derive(Copy, Clone, Debug)]
 pub struct Theme {
     /// The inidicator to render for the row that is currently selected.
@@ -369,8 +438,8 @@ impl Default for Theme {
 }
 
 impl Select for String {
-    fn set_search_content(&self, content: &mut Utf32String) {
-        *content = self.as_str().into();
+    fn search_content(&self) -> &str {
+        self.as_str()
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
@@ -383,8 +452,8 @@ impl Select for String {
 }
 
 impl Select for &str {
-    fn set_search_content(&self, content: &mut Utf32String) {
-        *content = (*self).into();
+    fn search_content(&self) -> &str {
+        self
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
@@ -397,8 +466,8 @@ impl Select for &str {
 }
 
 impl Select for Box<str> {
-    fn set_search_content(&self, content: &mut Utf32String) {
-        *content = (&**self).into();
+    fn search_content(&self) -> &str {
+        self
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
@@ -411,8 +480,8 @@ impl Select for Box<str> {
 }
 
 impl Select for Rc<str> {
-    fn set_search_content(&self, content: &mut Utf32String) {
-        *content = (&**self).into();
+    fn search_content(&self) -> &str {
+        self
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
@@ -425,8 +494,8 @@ impl Select for Rc<str> {
 }
 
 impl Select for Arc<str> {
-    fn set_search_content(&self, content: &mut Utf32String) {
-        *content = (&**self).into();
+    fn search_content(&self) -> &str {
+        self
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
@@ -439,8 +508,8 @@ impl Select for Arc<str> {
 }
 
 impl Select for Cow<'_, str> {
-    fn set_search_content(&self, content: &mut Utf32String) {
-        *content = (&**self).into();
+    fn search_content(&self) -> &str {
+        self
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
