@@ -76,6 +76,7 @@ pub struct FuzzySelect<T> {
     page_size: Option<NonZeroU16>,
     color: Option<bool>,
     theme: Theme,
+    alternate_screen: bool,
 }
 
 impl<T> Default for FuzzySelect<T> {
@@ -96,6 +97,7 @@ impl<T> FuzzySelect<T> {
             page_size: None,
             color: None,
             theme: Theme::default(),
+            alternate_screen: true,
         }
     }
 
@@ -222,6 +224,12 @@ impl<T> FuzzySelect<T> {
         self
     }
 
+    #[must_use]
+    pub fn with_alternate_screen(mut self, alternate_screen: bool) -> Self {
+        self.alternate_screen = alternate_screen;
+        self
+    }
+
     /// Runs the fuzzy select prompt and returns the selected item.
     ///
     /// # Errors
@@ -293,7 +301,7 @@ impl<T> FuzzySelect<T> {
     }
 
     fn init_prompt(&mut self) -> Result<Prompt> {
-        let term = Terminal::new(self.color)?;
+        let term = Terminal::new(self.color, self.alternate_screen)?;
         let page_size = self
             .page_size
             .map(NonZeroU16::get)
@@ -787,10 +795,11 @@ enum Stop {
 struct Terminal {
     io: StderrLock<'static>,
     err: Option<Error>,
+    alternate_screen: bool,
 }
 
 impl Terminal {
-    fn new(color: Option<bool>) -> Result<Self> {
+    fn new(color: Option<bool>, alternate_screen: bool) -> Result<Self> {
         terminal::enable_raw_mode().map_err(|e| match e.raw_os_error() {
             Some(25 | 6) => Error::NonInteractive,
             _ => e.into(),
@@ -801,9 +810,15 @@ impl Terminal {
         }
 
         let mut io = io::stderr().lock();
-        let _ = io.queue(terminal::EnterAlternateScreen)?;
+        if alternate_screen {
+            let _ = io.queue(terminal::EnterAlternateScreen)?;
+        }
 
-        Ok(Self { io, err: None })
+        Ok(Self {
+            io,
+            err: None,
+            alternate_screen,
+        })
     }
 
     fn queue(&mut self, cmd: impl crossterm::Command) -> &mut Self {
@@ -832,7 +847,9 @@ impl Terminal {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        let _ = self.queue(terminal::LeaveAlternateScreen).flush();
+        if self.alternate_screen {
+            let _ = self.queue(terminal::LeaveAlternateScreen).flush();
+        }
         let _ = terminal::disable_raw_mode();
     }
 }
