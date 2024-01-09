@@ -1,0 +1,67 @@
+[package]
+name = "fuzzy-select"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/knutwalker/fuzzy-select"
+authors = ["Paul Horn <developer@knutwalker.de>"]
+description = "Fuzzy select using Nucleo as matching engine"
+license = "MIT OR Apache-2.0"
+publish = false
+readme = "README.md"
+rust-version = "1.75.0"
+keywords = ["fuzzy", "terminal", "tui", "nucleo", "fzf", "skim"]
+
+[dependencies]
+crossterm = "0.27.0"
+nucleo = "0.3.0"
+thiserror = "1.0.56"
+
+[profile.release]
+codegen-units = 1
+debug = false
+debug-assertions = false
+lto = true
+opt-level = 3
+overflow-checks = true
+rpath = false
+strip = true
+
+[lints.rust]
+bad_style = "warn"
+dead_code = "warn"
+improper_ctypes = "warn"
+missing_copy_implementations = "warn"
+missing_debug_implementations = "warn"
+no_mangle_generic_items = "warn"
+non_shorthand_field_patterns = "warn"
+overflowing_literals = "warn"
+path_statements = "warn"
+patterns_in_fns_without_body = "warn"
+private_bounds = "warn"
+private_interfaces = "warn"
+rust_2018_idioms = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unconditional_recursion = "warn"
+unsafe_code = "warn"
+unused = "warn"
+unused_allocation = "warn"
+unused_comparisons = "warn"
+unused_crate_dependencies = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+unused_parens = "warn"
+unused_qualifications = "warn"
+unused_results = "warn"
+
+[lints.clippy]
+all = "warn"
+cargo = "warn"
+nursery = "warn"
+pedantic = "warn"
+missing_const_for_fn = "allow"
+
+[package.metadata.release]
+pre-release-commit-message = "Release {{crate_name}} {{version}}"
+sign-commit = true
+sign-tag = true
