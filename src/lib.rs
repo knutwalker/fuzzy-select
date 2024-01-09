@@ -16,7 +16,7 @@ use crossterm::{
 };
 use nucleo::{
     pattern::{CaseMatching, Normalization, Pattern},
-    Config, Matcher, Nucleo, Snapshot, Utf32Str,
+    Config, Matcher, Nucleo, Snapshot, Utf32Str, Utf32String,
 };
 
 pub use crossterm::style::{Attribute, Attributes, Color, ContentStyle, StyledContent, Stylize};
@@ -55,7 +55,7 @@ pub enum Error {
 /// This will only be included in the rendering, not in the search.
 pub trait Select {
     /// The content that is being used to match against the prompt input.
-    fn search_content(&self) -> &str;
+    fn set_search_content(&self, content: &mut Utf32String);
 
     /// Optionally render additional content before the search content when
     /// showing this item.
@@ -278,9 +278,8 @@ impl<T> FuzzySelect<T> {
         let injector = engine.injector();
 
         for (idx, item) in self.options.iter().enumerate() {
-            let column = item.search_content();
             let _ = injector.push(idx, move |cols| {
-                cols[0] = column.into();
+                item.set_search_content(&mut cols[0]);
             });
         }
 
@@ -366,8 +365,8 @@ impl Default for Theme {
 }
 
 impl Select for String {
-    fn search_content(&self) -> &str {
-        self
+    fn set_search_content(&self, content: &mut Utf32String) {
+        *content = self.as_str().into();
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
@@ -380,6 +379,10 @@ impl Select for String {
 }
 
 impl Select for &str {
+    fn set_search_content(&self, content: &mut Utf32String) {
+        *content = (*self).into();
+    }
+
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
         None::<Self>
     }
@@ -387,15 +390,11 @@ impl Select for &str {
     fn render_after_content(&self) -> Option<impl fmt::Display + '_> {
         None::<Self>
     }
-
-    fn search_content(&self) -> &str {
-        self
-    }
 }
 
 impl Select for Box<str> {
-    fn search_content(&self) -> &str {
-        self
+    fn set_search_content(&self, content: &mut Utf32String) {
+        *content = (&**self).into();
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
@@ -408,8 +407,8 @@ impl Select for Box<str> {
 }
 
 impl Select for Rc<str> {
-    fn search_content(&self) -> &str {
-        self
+    fn set_search_content(&self, content: &mut Utf32String) {
+        *content = (&**self).into();
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
@@ -422,8 +421,8 @@ impl Select for Rc<str> {
 }
 
 impl Select for Arc<str> {
-    fn search_content(&self) -> &str {
-        self
+    fn set_search_content(&self, content: &mut Utf32String) {
+        *content = (&**self).into();
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
@@ -436,8 +435,8 @@ impl Select for Arc<str> {
 }
 
 impl Select for Cow<'_, str> {
-    fn search_content(&self) -> &str {
-        self
+    fn set_search_content(&self, content: &mut Utf32String) {
+        *content = (&**self).into();
     }
 
     fn render_before_content(&self) -> Option<impl fmt::Display + '_> {
