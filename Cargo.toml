@@ -10,7 +10,7 @@ publish = true
 readme = "README.md"
 rust-version = "1.75.0"
 categories = ["command-line-utilities"]
-keywords = ["fuzzy", "terminal", "tui", "nucleo", "fzf", "skim"]
+keywords = ["fuzzy", "terminal", "tui", "nucleo", "fzf"]
 
 [dependencies]
 crossterm = "0.27.0"
