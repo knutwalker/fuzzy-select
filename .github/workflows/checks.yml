@@ -68,23 +68,3 @@ jobs:
         uses: taiki-e/install-action@nextest
       - name: Run unit tests
         run: cargo +${{ matrix.rust }} nextest run
-
-  release:
-    name: Release
-    needs: [check, fmt, unit-tests]
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Setup Rust
-        if: startsWith(github.ref, 'refs/tags/')
-        run: rustup toolchain install stable --profile minimal --no-self-update
-      - name: Set up Rust cache
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: Swatinem/rust-cache@v2
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p fuzzy-select
