@@ -324,11 +324,9 @@ impl<T> FuzzySelect<T> {
             let _status = engine.tick(10);
             let snap = engine.snapshot();
             if snap.matched_item_count() == 1 {
-                let index = *snap
-                    .get_matched_item(0)
-                    .expect("matched_item_count is 1")
-                    .data;
-                return Ok(self.options.swap_remove(index));
+                if let Some(index) = snap.get_matched_item(0) {
+                    return Ok(self.options.swap_remove(*index.data));
+                }
             }
         }
 
