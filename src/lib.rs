@@ -106,6 +106,7 @@ pub struct FuzzySelect<T> {
     color: Option<bool>,
     theme: Theme,
     alternate_screen: bool,
+    select1: bool,
 }
 
 impl<T> Default for FuzzySelect<T> {
@@ -127,6 +128,7 @@ impl<T> FuzzySelect<T> {
             color: None,
             theme: Theme::default(),
             alternate_screen: true,
+            select1: false,
         }
     }
 
@@ -202,6 +204,24 @@ impl<T> FuzzySelect<T> {
     #[must_use]
     pub fn set_query<Q: Into<String>>(mut self, query: impl Into<Option<Q>>) -> Self {
         self.query = query.into().map(Into::into);
+        self
+    }
+
+    #[must_use]
+    pub fn with_select1(mut self) -> Self {
+        self.select1 = true;
+        self
+    }
+
+    #[must_use]
+    pub fn without_select1(mut self) -> Self {
+        self.select1 = false;
+        self
+    }
+
+    #[must_use]
+    pub fn set_select1(mut self, select1: bool) -> Self {
+        self.select1 = select1;
         self
     }
 
@@ -299,6 +319,19 @@ impl<T> FuzzySelect<T> {
         }
 
         let mut engine = self.init_engine();
+
+        if self.query.is_some() && self.select1 {
+            let _status = engine.tick(10);
+            let snap = engine.snapshot();
+            if snap.matched_item_count() == 1 {
+                let index = *snap
+                    .get_matched_item(0)
+                    .expect("matched_item_count is 1")
+                    .data;
+                return Ok(self.options.swap_remove(index));
+            }
+        }
+
         let mut prompt = self.init_prompt()?;
         prompt.initial_prompt(self.prompt.as_deref());
 
