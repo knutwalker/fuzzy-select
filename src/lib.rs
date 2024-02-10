@@ -15,6 +15,7 @@
 //!
 //! ## Example
 //! ```no_run
+//! # fn main() -> Result<(), fuzzy_select::Error> {
 //! use fuzzy_select::FuzzySelect;
 //!
 //! let options = vec!["foo", "bar", "baz"];
@@ -24,6 +25,8 @@
 //!     .select()?;
 //!
 //! println!("Selected: {:?}", selected);
+//! # Ok(())
+//! # }
 //! ```
 use std::{
     borrow::Cow,
