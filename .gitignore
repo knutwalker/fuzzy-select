@@ -1,5 +1,3 @@
-
-
 ### Created by https://www.gitignore.io
 ### Vim ###
 # Swap
@@ -17,8 +15,6 @@ Sessionx.vim
 # Temporary
 .netrwhist
 *~
-# Auto-generated tag files
-tags
 # Persistent undo
 [._]*.un~
 
@@ -40,3 +36,4 @@ Cargo.lock
 
 # Don't ignore the .github directory
 !.github/
+!.release-plz.toml
