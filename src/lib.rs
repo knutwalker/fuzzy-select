@@ -463,7 +463,7 @@ impl Default for Theme {
         Self {
             selected_indicator: ContentStyle::new().red().on_black().apply('>'),
             indicator: ContentStyle::new().on_black().apply(' '),
-            selected_text: ContentStyle::new().on_black(),
+            selected_text: ContentStyle::new().white().on_black(),
             text: ContentStyle::new(),
             selected_highlight: ContentStyle::new().dark_cyan().on_black(),
             highlight: ContentStyle::new().cyan(),
