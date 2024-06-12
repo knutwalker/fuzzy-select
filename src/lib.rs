@@ -406,7 +406,7 @@ impl<T> FuzzySelect<T> {
         let injector = engine.injector();
 
         for (idx, item) in self.options.iter().enumerate() {
-            let _ = injector.push(idx, move |cols| {
+            let _ = injector.push(idx, move |_, cols| {
                 cols[0] = item.search_content().into();
             });
         }
