@@ -54,7 +54,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, onlyerror::Error)]
 pub enum Error {
     #[error("No options to select from")]
     NoOptions,
