@@ -100,10 +100,11 @@ pub trait Select {
 /// A fuzzy select prompt. See the [module level documentation](crate) for more information.
 #[derive(Clone, Debug)]
 pub struct FuzzySelect<T> {
-    options: Vec<T>,
     prompt: Option<String>,
+    options: Vec<T>,
     initial_selection: u32,
     query: Option<String>,
+    filter: bool,
     highlight: bool,
     page_size: Option<NonZeroU16>,
     color: Option<bool>,
@@ -122,10 +123,11 @@ impl<T> FuzzySelect<T> {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            options: Vec::new(),
             prompt: None,
+            options: Vec::new(),
             initial_selection: 0,
             query: None,
+            filter: true,
             highlight: true,
             page_size: None,
             color: None,
@@ -133,6 +135,24 @@ impl<T> FuzzySelect<T> {
             alternate_screen: true,
             select1: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.prompt = Some(prompt.into());
+        self
+    }
+
+    #[must_use]
+    pub fn without_prompt(mut self) -> Self {
+        self.prompt = None;
+        self
+    }
+
+    #[must_use]
+    pub fn set_prompt<P: Into<String>>(mut self, prompt: impl Into<Option<P>>) -> Self {
+        self.prompt = prompt.into().map(Into::into);
+        self
     }
 
     #[must_use]
@@ -169,24 +189,6 @@ impl<T> FuzzySelect<T> {
     }
 
     #[must_use]
-    pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.prompt = Some(prompt.into());
-        self
-    }
-
-    #[must_use]
-    pub fn without_prompt(mut self) -> Self {
-        self.prompt = None;
-        self
-    }
-
-    #[must_use]
-    pub fn set_prompt<P: Into<String>>(mut self, prompt: impl Into<Option<P>>) -> Self {
-        self.prompt = prompt.into().map(Into::into);
-        self
-    }
-
-    #[must_use]
     pub fn with_initial_selection(mut self, initial_selection: u32) -> Self {
         self.initial_selection = initial_selection;
         self
@@ -207,6 +209,24 @@ impl<T> FuzzySelect<T> {
     #[must_use]
     pub fn set_query<Q: Into<String>>(mut self, query: impl Into<Option<Q>>) -> Self {
         self.query = query.into().map(Into::into);
+        self
+    }
+
+    #[must_use]
+    pub fn with_filter(mut self) -> Self {
+        self.filter = true;
+        self
+    }
+
+    #[must_use]
+    pub fn without_filter(mut self) -> Self {
+        self.filter = false;
+        self
+    }
+
+    #[must_use]
+    pub fn set_filter(mut self, filter: bool) -> Self {
+        self.filter = filter;
         self
     }
 
@@ -421,6 +441,7 @@ impl<T> FuzzySelect<T> {
             selected,
             height: u32::from(page_size),
             active: true,
+            filter: self.filter,
             number_of_matches: u32::MAX,
             highlighter,
             input,
@@ -562,6 +583,7 @@ struct Prompt {
     selected: u32,
     height: u32,
     active: bool,
+    filter: bool,
     number_of_matches: u32,
     highlighter: Highlighter,
 }
@@ -573,9 +595,13 @@ impl Prompt {
             .queue_(terminal::Clear(ClearType::All));
 
         if let Some(prompt) = prompt {
-            self.term
-                .queue(style::Print(prompt))
-                .queue_(style::Print(" "));
+            self.term.queue_(style::Print(prompt));
+
+            if self.filter {
+                self.term.queue_(style::Print(" "));
+            } else {
+                self.term.queue_(cursor::Hide);
+            }
         }
 
         self.term.queue_(cursor::SavePosition);
@@ -762,7 +788,7 @@ impl Prompt {
                 self.scroll_offset = self.scroll_offset.saturating_add(self.height);
                 Changed::Selection
             }
-            (KeyCode::Char(c), _) => self.input.insert(c),
+            (KeyCode::Char(c), _) if self.filter => self.input.insert(c),
             _ => Changed::Nothing,
         }
     }
@@ -1057,6 +1083,7 @@ impl Terminal {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
+        self.queue_(cursor::Show);
         if self.alternate_screen {
             let _ = self.queue(terminal::LeaveAlternateScreen).flush();
         }

@@ -41,12 +41,12 @@ path_statements = "warn"
 patterns_in_fns_without_body = "warn"
 private_bounds = "warn"
 private_interfaces = "warn"
-rust_2018_idioms = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
 trivial_casts = "warn"
 trivial_numeric_casts = "warn"
 unconditional_recursion = "warn"
 unsafe_code = "warn"
-unused = "warn"
+unused = { level = "warn", priority = -1 }
 unused_allocation = "warn"
 unused_comparisons = "warn"
 unused_crate_dependencies = "warn"
@@ -61,5 +61,4 @@ all = "warn"
 cargo = "warn"
 nursery = "warn"
 pedantic = "warn"
-missing_const_for_fn = "allow"
-
+missing_const_for_fn = { level = "allow", priority = 2 }
