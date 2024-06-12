@@ -97,6 +97,7 @@ pub trait Select {
     fn render_after_content(&self) -> Option<impl fmt::Display + '_>;
 }
 
+#[allow(clippy::struct_excessive_bools)]
 /// A fuzzy select prompt. See the [module level documentation](crate) for more information.
 #[derive(Clone, Debug)]
 pub struct FuzzySelect<T> {
