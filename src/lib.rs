@@ -742,7 +742,12 @@ impl Prompt {
 
     fn handle_event(&mut self, event: &Event) -> Changed {
         match event {
-            Event::Key(KeyEvent {code, modifiers, kind: KeyEventKind::Press, ..}) => return self.handle_key_event(*code, *modifiers),
+            Event::Key(KeyEvent {
+                code,
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            }) => return self.handle_key_event(*code, *modifiers),
             Event::FocusLost => self.active = false,
             Event::FocusGained => self.active = true,
             Event::Resize(_, h) => {
