@@ -754,8 +754,7 @@ impl Prompt {
                 self.height = u32::from(h.saturating_sub(1));
                 return Changed::Selection;
             }
-            Event::Mouse(_) | Event::Paste(_) => {}
-            _ => {}
+            Event::Mouse(_) | Event::Paste(_) | Event::Key(_) => {}
         };
 
         Changed::Nothing
