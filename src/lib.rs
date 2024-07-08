@@ -39,7 +39,7 @@ use std::{
 
 use crossterm::{
     cursor,
-    event::{Event, KeyCode, KeyModifiers},
+    event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     style,
     terminal::{self, ClearType},
     QueueableCommand,
@@ -742,14 +742,19 @@ impl Prompt {
 
     fn handle_event(&mut self, event: &Event) -> Changed {
         match event {
-            Event::Key(key) => return self.handle_key_event(key.code, key.modifiers),
+            Event::Key(KeyEvent {
+                code,
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            }) => return self.handle_key_event(*code, *modifiers),
             Event::FocusLost => self.active = false,
             Event::FocusGained => self.active = true,
             Event::Resize(_, h) => {
                 self.height = u32::from(h.saturating_sub(1));
                 return Changed::Selection;
             }
-            Event::Mouse(_) | Event::Paste(_) => {}
+            Event::Mouse(_) | Event::Paste(_) | Event::Key(_) => {}
         };
 
         Changed::Nothing
